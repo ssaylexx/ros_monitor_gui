@@ -6,9 +6,11 @@ import math
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
                            QLabel, QPushButton, QGroupBox, QGridLayout, QTabWidget)
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QFont, QImage, QPixmap
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import Image
+from cv_bridge import CvBridge, CvBridgeError
 
 try:
     from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -31,17 +33,12 @@ class MplCanvas(FigureCanvas):
         self.axes.set_xlim(-1, 1); self.axes.set_ylim(-1, 1)
         
     def update_plot(self, x, y):
-        # Deadband filter: не рисуем, если сдвиг < 1см
         if self.path_x:
             dist = math.sqrt((x - self.path_x[-1])**2 + (y - self.path_y[-1])**2)
             if dist < 0.01: return
-            
-        self.path_x.append(x)
-        self.path_y.append(y)
+        self.path_x.append(x); self.path_y.append(y)
         self.line.set_data(self.path_x, self.path_y)
         self.robot_point.set_data([x], [y])
-        
-        # Умный масштаб
         if len(self.path_x) > 5:
             margin = 1.5
             cx = (min(self.path_x) + max(self.path_x)) / 2
@@ -50,15 +47,13 @@ class MplCanvas(FigureCanvas):
             dy = max(max(self.path_y) - min(self.path_y), 2.0)
             self.axes.set_xlim(cx - dx/2 - 0.5, cx + dx/2 + 0.5)
             self.axes.set_ylim(cy - dy/2 - 0.5, cy + dy/2 + 0.5)
-            
-        # ИСПРАВЛЕНИЕ: используем draw_idle вместо draw
-        self.draw_idle() 
+        self.draw_idle()
 
 class RobotMonitorGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Robot Monitor - v1.7")
-        self.resize(900, 600)
+        self.setWindowTitle("Robot Monitor - v1.8")
+        self.resize(1000, 650)
         
         app_font = QFont("DejaVu Sans", 10)
         QApplication.setFont(app_font)
@@ -74,8 +69,10 @@ class RobotMonitorGUI(QWidget):
         self.tabs.addTab(dash, "Dashboard"); self.tabs.addTab(ctrl_tab, "Control"); self.tabs.addTab(logs_tab, "Logs")
         main.addWidget(self.tabs)
         
+        # DASHBOARD с камерой
         dash_layout = QHBoxLayout(dash)
         left_col = QVBoxLayout()
+        
         status = QGroupBox("Robot Status")
         sl = QVBoxLayout()
         self.pos_lbl = QLabel("Position: x=0.00 y=0.00")
@@ -84,9 +81,20 @@ class RobotMonitorGUI(QWidget):
         for l in [self.pos_lbl, self.spd_lbl, self.yaw_lbl]: sl.addWidget(l)
         status.setLayout(sl); left_col.addWidget(status)
         
+        # КАМЕРА
+        cam_group = QGroupBox("Camera Feed")
+        cl = QVBoxLayout()
+        self.cam_lbl = QLabel("Waiting for camera...")
+        self.cam_lbl.setMinimumSize(320, 240)
+        self.cam_lbl.setAlignment(Qt.AlignCenter)
+        self.cam_lbl.setStyleSheet("background: black; color: white; border: 2px solid #333;")
+        cl.addWidget(self.cam_lbl)
+        cam_group.setLayout(cl); left_col.addWidget(cam_group)
+        
         self.canvas = MplCanvas(self)
         dash_layout.addLayout(left_col); dash_layout.addWidget(self.canvas)
         
+        # CONTROL
         ctrl_layout = QVBoxLayout(ctrl_tab)
         ctrl = QGroupBox("Manual Control")
         grid = QGridLayout()
@@ -102,6 +110,11 @@ class RobotMonitorGUI(QWidget):
         rospy.init_node('robot_monitor_gui', anonymous=True)
         self.cmd_pub = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
         self.odom_sub = rospy.Subscriber('/odom', Odometry, self.odom_cb)
+        
+        # Подписка на камеру
+        self.bridge = CvBridge()
+        self.cam_sub = rospy.Subscriber('/spcbot/camera/image_raw', Image, self.cam_cb)
+        
         self.timer = QTimer(); self.timer.timeout.connect(self.update_labels); self.timer.start(100)
         self.last_x = 0.0; self.last_y = 0.0; self.last_yaw = 0.0; self.last_spd = 0.0
         
@@ -110,6 +123,16 @@ class RobotMonitorGUI(QWidget):
         self.btn_left.clicked.connect(lambda: self.send_cmd(0, 1.0))
         self.btn_right.clicked.connect(lambda: self.send_cmd(0, -1.0))
         self.btn_stop.clicked.connect(lambda: self.send_cmd(0, 0))
+
+    def cam_cb(self, msg):
+        try:
+            cv_img = self.bridge.imgmsg_to_cv2(msg, "bgr8")
+            h, w, ch = cv_img.shape
+            qt_img = QImage(cv_img.data, w, h, ch*w, QImage.Format_RGB888).rgbSwapped()
+            self.cam_lbl.setPixmap(QPixmap.fromImage(qt_img).scaled(
+                self.cam_lbl.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        except CvBridgeError as e:
+            pass
 
     def odom_cb(self, msg):
         self.last_x = msg.pose.pose.position.x; self.last_y = msg.pose.pose.position.y
