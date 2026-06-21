@@ -12,7 +12,7 @@ from nav_msgs.msg import Odometry
 class RobotMonitorGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Robot Monitor - v1.3")
+        self.setWindowTitle("Robot Monitor - v1.4")
         self.resize(600, 600)
         
         main = QVBoxLayout()
@@ -35,10 +35,10 @@ class RobotMonitorGUI(QWidget):
         # Кнопки
         ctrl = QGroupBox("Manual Control")
         grid = QGridLayout()
-        self.btn_fwd = QPushButton("^ Forward")
-        self.btn_back = QPushButton("v Backward")
-        self.btn_left = QPushButton("< Left")
-        self.btn_right = QPushButton("> Right")
+        self.btn_fwd = QPushButton("â² Forward")  # Будет отображаться как â²
+        self.btn_back = QPushButton("â¼ Backward") # Будет â¼
+        self.btn_left = QPushButton("â Left")     # Будет â
+        self.btn_right = QPushButton("â¶ Right")   # Будет â¶
         self.btn_stop = QPushButton("STOP")
         grid.addWidget(self.btn_fwd, 0, 1)
         grid.addWidget(self.btn_left, 1, 0)
