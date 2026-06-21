@@ -4,16 +4,21 @@ import sys
 import rospy
 import math
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
-                           QLabel, QPushButton, QGroupBox, QGridLayout)
+                           QLabel, QPushButton, QGroupBox, QGridLayout, QTabWidget)
 from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QFont
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 
 class RobotMonitorGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Robot Monitor - v1.4")
-        self.resize(600, 600)
+        self.setWindowTitle("Robot Monitor - v1.5")
+        self.resize(700, 600)
+        
+        # ИСПРАВЛЕНИЕ КОДИРОВКИ
+        app_font = QFont("DejaVu Sans", 10)
+        QApplication.setFont(app_font)
         
         main = QVBoxLayout()
         title = QLabel("ROBOT MONITOR")
@@ -21,7 +26,19 @@ class RobotMonitorGUI(QWidget):
         title.setStyleSheet("font-size: 24px; font-weight: bold; margin: 20px;")
         main.addWidget(title)
         
-        # Статус
+        # ВКЛАДКИ
+        self.tabs = QTabWidget()
+        dash = QWidget()
+        ctrl_tab = QWidget()
+        logs_tab = QWidget()
+        self.tabs.addTab(dash, "Dashboard")
+        self.tabs.addTab(ctrl_tab, "Control")
+        self.tabs.addTab(logs_tab, "Logs")
+        main.addWidget(self.tabs)
+        
+        # DASHBOARD CONTENT
+        dash_layout = QVBoxLayout(dash)
+        
         status = QGroupBox("Robot Status")
         sl = QVBoxLayout()
         self.pos_lbl = QLabel("Position: x=0.00 y=0.00")
@@ -30,15 +47,17 @@ class RobotMonitorGUI(QWidget):
         for l in [self.pos_lbl, self.spd_lbl, self.yaw_lbl]:
             sl.addWidget(l)
         status.setLayout(sl)
-        main.addWidget(status)
+        dash_layout.addWidget(status)
         
-        # Кнопки
+        # CONTROL CONTENT (перенесено во вкладку)
+        ctrl_layout = QVBoxLayout(ctrl_tab)
         ctrl = QGroupBox("Manual Control")
         grid = QGridLayout()
-        self.btn_fwd = QPushButton("â² Forward")  # Будет отображаться как â²
-        self.btn_back = QPushButton("â¼ Backward") # Будет â¼
-        self.btn_left = QPushButton("â Left")     # Будет â
-        self.btn_right = QPushButton("â¶ Right")   # Будет â¶
+        # ASCII стрелки вместо Unicode
+        self.btn_fwd = QPushButton("^ Forward")
+        self.btn_back = QPushButton("v Backward")
+        self.btn_left = QPushButton("< Left")
+        self.btn_right = QPushButton("> Right")
         self.btn_stop = QPushButton("STOP")
         grid.addWidget(self.btn_fwd, 0, 1)
         grid.addWidget(self.btn_left, 1, 0)
@@ -46,7 +65,7 @@ class RobotMonitorGUI(QWidget):
         grid.addWidget(self.btn_right, 1, 2)
         grid.addWidget(self.btn_back, 2, 1)
         ctrl.setLayout(grid)
-        main.addWidget(ctrl)
+        ctrl_layout.addWidget(ctrl)
         
         self.setLayout(main)
         
@@ -54,16 +73,11 @@ class RobotMonitorGUI(QWidget):
         self.cmd_pub = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
         self.odom_sub = rospy.Subscriber('/odom', Odometry, self.odom_cb)
         
-        # Таймер обновления текста
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_labels)
         self.timer.start(400)
         
-        # Данные
-        self.last_x = 0.0
-        self.last_y = 0.0
-        self.last_yaw = 0.0
-        self.last_spd = 0.0
+        self.last_x = 0.0; self.last_y = 0.0; self.last_yaw = 0.0; self.last_spd = 0.0
         
         self.btn_fwd.clicked.connect(lambda: self.send_cmd(0.5, 0))
         self.btn_back.clicked.connect(lambda: self.send_cmd(-0.5, 0))
