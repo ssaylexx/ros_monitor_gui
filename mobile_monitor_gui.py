@@ -4,7 +4,7 @@ import sys
 import rospy
 import math
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
-                           QLabel, QPushButton, QGroupBox, QGridLayout, QTabWidget)
+                           QLabel, QPushButton, QGroupBox, QGridLayout, QTabWidget, QTextEdit)
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont, QImage, QPixmap
 from geometry_msgs.msg import Twist
@@ -31,7 +31,6 @@ class MplCanvas(FigureCanvas):
         self.axes.grid(True, linestyle='--', alpha=0.7)
         self.axes.set_aspect('equal')
         self.axes.set_xlim(-1, 1); self.axes.set_ylim(-1, 1)
-        
     def update_plot(self, x, y):
         if self.path_x:
             dist = math.sqrt((x - self.path_x[-1])**2 + (y - self.path_y[-1])**2)
@@ -52,9 +51,8 @@ class MplCanvas(FigureCanvas):
 class RobotMonitorGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Robot Monitor - v1.8")
+        self.setWindowTitle("Robot Monitor - v1.9")
         self.resize(1000, 650)
-        
         app_font = QFont("DejaVu Sans", 10)
         QApplication.setFont(app_font)
         
@@ -69,10 +67,9 @@ class RobotMonitorGUI(QWidget):
         self.tabs.addTab(dash, "Dashboard"); self.tabs.addTab(ctrl_tab, "Control"); self.tabs.addTab(logs_tab, "Logs")
         main.addWidget(self.tabs)
         
-        # DASHBOARD с камерой
+        # DASHBOARD
         dash_layout = QHBoxLayout(dash)
         left_col = QVBoxLayout()
-        
         status = QGroupBox("Robot Status")
         sl = QVBoxLayout()
         self.pos_lbl = QLabel("Position: x=0.00 y=0.00")
@@ -80,17 +77,12 @@ class RobotMonitorGUI(QWidget):
         self.yaw_lbl = QLabel("Yaw: 0.0 deg")
         for l in [self.pos_lbl, self.spd_lbl, self.yaw_lbl]: sl.addWidget(l)
         status.setLayout(sl); left_col.addWidget(status)
-        
-        # КАМЕРА
         cam_group = QGroupBox("Camera Feed")
         cl = QVBoxLayout()
         self.cam_lbl = QLabel("Waiting for camera...")
-        self.cam_lbl.setMinimumSize(320, 240)
-        self.cam_lbl.setAlignment(Qt.AlignCenter)
+        self.cam_lbl.setMinimumSize(320, 240); self.cam_lbl.setAlignment(Qt.AlignCenter)
         self.cam_lbl.setStyleSheet("background: black; color: white; border: 2px solid #333;")
-        cl.addWidget(self.cam_lbl)
-        cam_group.setLayout(cl); left_col.addWidget(cam_group)
-        
+        cl.addWidget(self.cam_lbl); cam_group.setLayout(cl); left_col.addWidget(cam_group)
         self.canvas = MplCanvas(self)
         dash_layout.addLayout(left_col); dash_layout.addWidget(self.canvas)
         
@@ -106,15 +98,22 @@ class RobotMonitorGUI(QWidget):
         grid.addWidget(self.btn_back, 2, 1)
         ctrl.setLayout(grid); ctrl_layout.addWidget(ctrl)
         
+        # LOGS TAB
+        logs_layout = QVBoxLayout(logs_tab)
+        self.log_txt = QTextEdit()
+        self.log_txt.setReadOnly(True)
+        self.log_txt.setStyleSheet("""
+            background-color: #1e1e1e; color: #00ff00; 
+            font-family: 'Consolas', monospace; font-size: 12px;
+        """)
+        logs_layout.addWidget(self.log_txt)
+        
         self.setLayout(main)
         rospy.init_node('robot_monitor_gui', anonymous=True)
         self.cmd_pub = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
         self.odom_sub = rospy.Subscriber('/odom', Odometry, self.odom_cb)
-        
-        # Подписка на камеру
         self.bridge = CvBridge()
         self.cam_sub = rospy.Subscriber('/spcbot/camera/image_raw', Image, self.cam_cb)
-        
         self.timer = QTimer(); self.timer.timeout.connect(self.update_labels); self.timer.start(100)
         self.last_x = 0.0; self.last_y = 0.0; self.last_yaw = 0.0; self.last_spd = 0.0
         
@@ -123,6 +122,14 @@ class RobotMonitorGUI(QWidget):
         self.btn_left.clicked.connect(lambda: self.send_cmd(0, 1.0))
         self.btn_right.clicked.connect(lambda: self.send_cmd(0, -1.0))
         self.btn_stop.clicked.connect(lambda: self.send_cmd(0, 0))
+        
+        self.log_msg("System initialized successfully.")
+
+    def log_msg(self, msg):
+        ts = rospy.get_time()
+        self.log_txt.append(f"[{ts:.2f}] {msg}")
+        sb = self.log_txt.verticalScrollBar()
+        sb.setValue(sb.maximum())
 
     def cam_cb(self, msg):
         try:
@@ -132,7 +139,7 @@ class RobotMonitorGUI(QWidget):
             self.cam_lbl.setPixmap(QPixmap.fromImage(qt_img).scaled(
                 self.cam_lbl.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
         except CvBridgeError as e:
-            pass
+            self.log_msg(f"CvBridge Error: {e}")
 
     def odom_cb(self, msg):
         self.last_x = msg.pose.pose.position.x; self.last_y = msg.pose.pose.position.y
@@ -148,6 +155,7 @@ class RobotMonitorGUI(QWidget):
 
     def send_cmd(self, lin, ang):
         t = Twist(); t.linear.x = lin; t.angular.z = ang; self.cmd_pub.publish(t)
+        self.log_msg(f"CMD: lin={lin:.2f}, ang={ang:.2f}")
 
 if __name__ == '__main__':
     app = QApplication(sys.argv); win = RobotMonitorGUI(); win.show(); sys.exit(app.exec_())
