@@ -10,13 +10,37 @@ from PyQt5.QtGui import QFont
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 
+# Matplotlib imports
+try:
+    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+    from matplotlib.figure import Figure
+except ImportError:
+    print("Matplotlib required!")
+    sys.exit(1)
+
+class MplCanvas(FigureCanvas):
+    def __init__(self, parent):
+        self.fig = Figure(figsize=(5,4), dpi=100)
+        self.axes = self.fig.add_subplot(111)
+        super().__init__(self.fig)
+        self.setParent(parent)
+        self.path_x, self.path_y = [], []
+        self.line, = self.axes.plot([], [], 'b-')
+        self.axes.set_title("Trajectory")
+        
+    def update_plot(self, x, y):
+        self.path_x.append(x)
+        self.path_y.append(y)
+        self.line.set_data(self.path_x, self.path_y)
+        # ВАЖНО: используем draw() -> вызывает мерцание
+        self.draw() 
+
 class RobotMonitorGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Robot Monitor - v1.5")
-        self.resize(700, 600)
+        self.setWindowTitle("Robot Monitor - v1.6")
+        self.resize(900, 600)
         
-        # ИСПРАВЛЕНИЕ КОДИРОВКИ
         app_font = QFont("DejaVu Sans", 10)
         QApplication.setFont(app_font)
         
@@ -26,7 +50,6 @@ class RobotMonitorGUI(QWidget):
         title.setStyleSheet("font-size: 24px; font-weight: bold; margin: 20px;")
         main.addWidget(title)
         
-        # ВКЛАДКИ
         self.tabs = QTabWidget()
         dash = QWidget()
         ctrl_tab = QWidget()
@@ -36,8 +59,9 @@ class RobotMonitorGUI(QWidget):
         self.tabs.addTab(logs_tab, "Logs")
         main.addWidget(self.tabs)
         
-        # DASHBOARD CONTENT
-        dash_layout = QVBoxLayout(dash)
+        # DASHBOARD
+        dash_layout = QHBoxLayout(dash)
+        left_col = QVBoxLayout()
         
         status = QGroupBox("Robot Status")
         sl = QVBoxLayout()
@@ -47,13 +71,17 @@ class RobotMonitorGUI(QWidget):
         for l in [self.pos_lbl, self.spd_lbl, self.yaw_lbl]:
             sl.addWidget(l)
         status.setLayout(sl)
-        dash_layout.addWidget(status)
+        left_col.addWidget(status)
         
-        # CONTROL CONTENT (перенесено во вкладку)
+        # Добавляем график справа
+        self.canvas = MplCanvas(self)
+        dash_layout.addLayout(left_col)
+        dash_layout.addWidget(self.canvas)
+        
+        # CONTROL
         ctrl_layout = QVBoxLayout(ctrl_tab)
         ctrl = QGroupBox("Manual Control")
         grid = QGridLayout()
-        # ASCII стрелки вместо Unicode
         self.btn_fwd = QPushButton("^ Forward")
         self.btn_back = QPushButton("v Backward")
         self.btn_left = QPushButton("< Left")
@@ -75,7 +103,7 @@ class RobotMonitorGUI(QWidget):
         
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_labels)
-        self.timer.start(400)
+        self.timer.start(100) # Быстрое обновление для демонстрации мерцания
         
         self.last_x = 0.0; self.last_y = 0.0; self.last_yaw = 0.0; self.last_spd = 0.0
         
@@ -91,6 +119,8 @@ class RobotMonitorGUI(QWidget):
         q = msg.pose.pose.orientation
         self.last_yaw = math.atan2(2*(q.w*q.z + q.x*q.y), 1 - 2*(q.y**2 + q.z**2))
         self.last_spd = msg.twist.twist.linear.x
+        # Обновляем график каждый кадр
+        self.canvas.update_plot(self.last_x, self.last_y)
 
     def update_labels(self):
         self.pos_lbl.setText(f"Position: x={self.last_x:.2f} y={self.last_y:.2f}")
