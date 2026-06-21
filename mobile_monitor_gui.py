@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                            QTextEdit, QSlider)
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont, QImage, QPixmap
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge, CvBridgeError
@@ -52,12 +52,11 @@ class MplCanvas(FigureCanvas):
 class RobotMonitorGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Robot Monitor - v2.0")
-        self.resize(1000, 650)
+        self.setWindowTitle("Robot Monitor - v2.1")
+        self.resize(1000, 700)
         app_font = QFont("DejaVu Sans", 10)
         QApplication.setFont(app_font)
         
-        # Переменные скорости
         self.linear_speed = 0.5
         self.angular_speed = 1.0
         
@@ -91,26 +90,23 @@ class RobotMonitorGUI(QWidget):
         self.canvas = MplCanvas(self)
         dash_layout.addLayout(left_col); dash_layout.addWidget(self.canvas)
         
-        # CONTROL с ползунками
+        # CONTROL с маневрами
         ctrl_layout = QVBoxLayout(ctrl_tab)
         
         spd_group = QGroupBox("Speed Settings")
         spd_lay = QHBoxLayout()
-        
         ll = QVBoxLayout()
         ll.addWidget(QLabel("Linear (m/s)"))
         self.lin_sl = QSlider(Qt.Horizontal); self.lin_sl.setRange(1,10); self.lin_sl.setValue(5)
         self.lin_lbl = QLabel("0.5")
         self.lin_sl.valueChanged.connect(lambda v: self.set_speed(v, 'lin'))
         ll.addWidget(self.lin_sl); ll.addWidget(self.lin_lbl, alignment=Qt.AlignCenter)
-        
         al = QVBoxLayout()
         al.addWidget(QLabel("Angular (rad/s)"))
         self.ang_sl = QSlider(Qt.Horizontal); self.ang_sl.setRange(1,20); self.ang_sl.setValue(10)
         self.ang_lbl = QLabel("1.0")
         self.ang_sl.valueChanged.connect(lambda v: self.set_speed(v, 'ang'))
         al.addWidget(self.ang_sl); al.addWidget(self.ang_lbl, alignment=Qt.AlignCenter)
-        
         spd_lay.addLayout(ll); spd_lay.addLayout(al)
         spd_group.setLayout(spd_lay); ctrl_layout.addWidget(spd_group)
         
@@ -124,6 +120,15 @@ class RobotMonitorGUI(QWidget):
         grid.addWidget(self.btn_back, 2, 1)
         ctrl.setLayout(grid); ctrl_layout.addWidget(ctrl)
         
+        # MANEUVERS
+        man_group = QGroupBox("Special Maneuvers")
+        ml = QHBoxLayout()
+        self.t90 = QPushButton("Turn 90 CW")
+        self.t180 = QPushButton("Turn 180")
+        self.rst = QPushButton("Reset Pos")
+        ml.addWidget(self.t90); ml.addWidget(self.t180); ml.addWidget(self.rst)
+        man_group.setLayout(ml); ctrl_layout.addWidget(man_group)
+        
         # LOGS
         logs_layout = QVBoxLayout(logs_tab)
         self.log_txt = QTextEdit(); self.log_txt.setReadOnly(True)
@@ -136,6 +141,12 @@ class RobotMonitorGUI(QWidget):
         self.odom_sub = rospy.Subscriber('/odom', Odometry, self.odom_cb)
         self.bridge = CvBridge()
         self.cam_sub = rospy.Subscriber('/spcbot/camera/image_raw', Image, self.cam_cb)
+        
+        # Таймер для поворотов
+        self.turn_timer = QTimer()
+        self.turn_timer.setSingleShot(True)
+        self.turn_timer.timeout.connect(self.stop_robot)
+        
         self.timer = QTimer(); self.timer.timeout.connect(self.update_labels); self.timer.start(100)
         self.last_x = 0.0; self.last_y = 0.0; self.last_yaw = 0.0; self.last_spd = 0.0
         
@@ -143,17 +154,50 @@ class RobotMonitorGUI(QWidget):
         self.btn_back.clicked.connect(lambda: self.send_cmd(-self.linear_speed, 0))
         self.btn_left.clicked.connect(lambda: self.send_cmd(0, self.angular_speed))
         self.btn_right.clicked.connect(lambda: self.send_cmd(0, -self.angular_speed))
-        self.btn_stop.clicked.connect(lambda: self.send_cmd(0, 0))
+        self.btn_stop.clicked.connect(self.stop_robot)
         
-        self.log_msg("System initialized. Speed sliders active.")
+        self.t90.clicked.connect(lambda: self.do_turn(90))
+        self.t180.clicked.connect(lambda: self.do_turn(180))
+        self.rst.clicked.connect(self.reset_pos)
+        
+        self.log_msg("System initialized. Maneuvers active.")
 
     def set_speed(self, v, t):
         if t == 'lin':
-            self.linear_speed = v / 10.0
-            self.lin_lbl.setText(f"{self.linear_speed:.1f}")
+            self.linear_speed = v / 10.0; self.lin_lbl.setText(f"{self.linear_speed:.1f}")
         else:
-            self.angular_speed = v / 10.0
-            self.ang_lbl.setText(f"{self.angular_speed:.1f}")
+            self.angular_speed = v / 10.0; self.ang_lbl.setText(f"{self.angular_speed:.1f}")
+
+    def do_turn(self, deg):
+        if self.turn_timer.isActive():
+            self.turn_timer.stop(); self.send_cmd(0, 0)
+        rad = math.radians(deg)
+        dur = abs(rad) / self.angular_speed
+        direction = 1 if deg > 0 else -1
+        self.send_cmd(0, direction * self.angular_speed)
+        self.turn_timer.start(int(dur * 1000))
+        self.log_msg(f"TURN {deg} deg started, duration: {dur:.1f}s")
+
+    def stop_robot(self):
+        self.send_cmd(0, 0)
+        if self.turn_timer.isActive(): self.turn_timer.stop()
+
+    def reset_pos(self):
+        self.log_msg("Resetting position to (0,0,0)...")
+        # Очистка графика
+        self.canvas.path_x.clear(); self.canvas.path_y.clear()
+        self.canvas.line.set_data([], [])
+        self.canvas.axes.set_xlim(-1, 1); self.canvas.axes.set_ylim(-1, 1)
+        self.canvas.draw_idle()
+        # Публикация в /initialpose
+        pub = rospy.Publisher('/initialpose', PoseWithCovarianceStamped, queue_size=1)
+        msg = PoseWithCovarianceStamped()
+        msg.header.stamp = rospy.Time.now()
+        msg.header.frame_id = "map"
+        msg.pose.pose.orientation.w = 1.0
+        pub.publish(msg)
+        self.last_x = 0.0; self.last_y = 0.0; self.last_yaw = 0.0
+        self.log_msg("Position reset complete!")
 
     def log_msg(self, msg):
         ts = rospy.get_time()
@@ -184,7 +228,6 @@ class RobotMonitorGUI(QWidget):
 
     def send_cmd(self, lin, ang):
         t = Twist(); t.linear.x = lin; t.angular.z = ang; self.cmd_pub.publish(t)
-        self.log_msg(f"CMD: lin={lin:.2f}, ang={ang:.2f}")
 
 if __name__ == '__main__':
     app = QApplication(sys.argv); win = RobotMonitorGUI(); win.show(); sys.exit(app.exec_())
